@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
 from psp_emulator.core import MIPS32Core, MemoryMap, PSPMemoryMap
 from psp_emulator.emulator import PSPEmulator
 from psp_emulator.gpu import Framebuffer, PSPGPU
+from psp_emulator.input import InputController
 
 
 def test_memory_round_trip():
@@ -27,9 +28,9 @@ def test_cpu_addi_and_add():
     memory = MemoryMap()
     cpu = MIPS32Core(memory)
     cpu.pc = 0x1000
-    memory.write_u32(0x1000, 0x24090005)  # addiu t1, zero, 5
-    memory.write_u32(0x1004, 0x240A0003)  # addiu t2, zero, 3
-    memory.write_u32(0x1008, 0x012A4020)  # add a0, t1, t2
+    memory.write_u32(0x1000, 0x24090005)
+    memory.write_u32(0x1004, 0x240A0003)
+    memory.write_u32(0x1008, 0x012A4020)
     cpu.step(); cpu.step(); cpu.step()
     assert cpu.read_reg("t1") == 5
     assert cpu.read_reg("t2") == 3
@@ -42,6 +43,15 @@ def test_gpu_framebuffer():
     assert fb.pixel(2, 2) == (255, 0, 0)
     fb.draw_pixel(9, 9, (0, 255, 0))
     assert fb.pixel(9, 9) == (0, 255, 0)
+
+
+def test_input_controller():
+    controller = InputController()
+    controller.press("cross", "start")
+    assert controller.is_pressed("cross") is True
+    assert controller.is_pressed("start") is True
+    controller.release("cross")
+    assert controller.is_pressed("cross") is False
 
 
 def test_psp_demo_boot():
@@ -61,3 +71,11 @@ def test_gpu_summary():
     assert summary["width"] == 480
     assert summary["height"] == 272
     assert summary["pixels"] == 480 * 272
+
+
+def test_run_frame_updates_state():
+    emulator = PSPEmulator()
+    emulator.press("cross")
+    result = emulator.run_frame(3)
+    assert result["frame"] == 1
+    assert result["input"]["cross"] is True

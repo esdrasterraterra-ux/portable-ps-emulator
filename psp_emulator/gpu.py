@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 class MemoryMap:
-    """Mapeamento simples de memória para uso de baixo nível em emulação."""
+    """Mapeamento simples de memória para uso em emulação."""
 
     def __init__(self, size: int = 64 * 1024 * 1024):
         self.size = size
@@ -138,6 +138,22 @@ class MIPS32Core:
             if funct == 0x00:
                 self.pc = next_pc
                 return
+            if funct == 0x02:
+                self.write_reg(rd, self.read_reg(rt) >> shamt)
+                self.pc = next_pc
+                return
+            if funct == 0x03:
+                value = self.read_reg(rt) >> shamt
+                self.write_reg(rd, self._sign_extend(value, 32 - shamt) if shamt else value)
+                self.pc = next_pc
+                return
+            if funct == 0x08:
+                self.pc = self.read_reg(rs)
+                return
+            if funct == 0x09:
+                self.write_reg(rd, next_pc)
+                self.pc = self.read_reg(rs)
+                return
             if funct == 0x20:
                 self.write_reg(rd, (self.read_reg(rs) + self.read_reg(rt)) & 0xFFFFFFFF)
                 self.pc = next_pc
@@ -165,22 +181,6 @@ class MIPS32Core:
             if funct == 0x27:
                 self.write_reg(rd, (~(self.read_reg(rs) | self.read_reg(rt))) & 0xFFFFFFFF)
                 self.pc = next_pc
-                return
-            if funct == 0x02:
-                self.write_reg(rd, self.read_reg(rt) >> shamt)
-                self.pc = next_pc
-                return
-            if funct == 0x03:
-                value = self.read_reg(rt) >> shamt
-                self.write_reg(rd, self._sign_extend(value, 32 - shamt) if shamt else value)
-                self.pc = next_pc
-                return
-            if funct == 0x08:
-                self.pc = self.read_reg(rs)
-                return
-            if funct == 0x09:
-                self.write_reg(rd, next_pc)
-                self.pc = self.read_reg(rs)
                 return
             if funct == 0x2A:
                 self.write_reg(rd, int(self.read_reg(rs) < self.read_reg(rt)))

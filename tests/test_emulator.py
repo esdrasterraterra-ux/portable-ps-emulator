@@ -9,6 +9,7 @@ def main(argv=None):
     parser.add_argument("--steps", type=int, default=10, help="Número de instruções a executar")
     parser.add_argument("--demo", action="store_true", help="Executa um programa de demonstração em vez de ROM")
     parser.add_argument("--gpu-demo", action="store_true", help="Executa uma demonstração da GPU do PSP")
+    parser.add_argument("--press", nargs="*", default=[], help="Botões a serem pressionados durante a execução")
     args = parser.parse_args(argv)
 
     emulator = PSPEmulator()
@@ -22,6 +23,9 @@ def main(argv=None):
     else:
         emulator.load_demo_program()
         print("Nenhuma ROM especificada; executando demonstração padrão.")
+
+    if args.press:
+        emulator.press(*args.press)
 
     emulator.run(args.steps)
     print(emulator.state_summary())
