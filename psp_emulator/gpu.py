@@ -1,311 +1,185 @@
 from __future__ import annotations
 
 
-class MemoryMap:
-    """Mapeamento simples de memória para uso em emulação."""
+class Framebuffer:
+    """Framebuffer simples para renderização 2D do PSP."""
 
-    def __init__(self, size: int = 64 * 1024 * 1024):
-        self.size = size
-        self._data = bytearray(size)
+    def __init__(self, width: int = 480, height: int = 272, background: tuple[int, int, int] = (0, 0, 0)):
+        self.width = max(1, width)
+        self.height = max(1, height)
+        self.background = background
+        self.pixels = [background for _ in range(self.width * self.height)]
 
-    def _check_bounds(self, address: int) -> None:
-        if not 0 <= address < self.size:
-            raise IndexError(f"Endereço fora do intervalo de memória: 0x{address:x}")
+    def _clamp(self, value: int, limit: int) -> int:
+        return max(0, min(value, limit - 1))
 
-    def read_u8(self, address: int) -> int:
-        self._check_bounds(address)
-        return self._data[address]
+    def _index(self, x: int, y: int) -> int:
+        if not 0 <= x < self.width or not 0 <= y < self.height:
+            raise IndexError(f"Coordenada fora do framebuffer: ({x}, {y})")
+        return y * self.width + x
 
-    def read_u16(self, address: int) -> int:
-        return (self.read_u8(address) | (self.read_u8(address + 1) << 8)) & 0xFFFF
+    def clear(self, color: tuple[int, int, int] | None = None) -> None:
+        fill = color if color is not None else self.background
+        self.pixels = [fill for _ in range(self.width * self.height)]
 
-    def read_u32(self, address: int) -> int:
-        value = 0
-        for offset in range(4):
-            value |= self.read_u8(address + offset) << (offset * 8)
-        return value & 0xFFFFFFFF
+    def draw_pixel(self, x: int, y: int, color: tuple[int, int, int]) -> None:
+        if 0 <= x < self.width and 0 <= y < self.height:
+            self.pixels[self._index(x, y)] = tuple(channel & 0xFF for channel in color)
 
-    def write_u8(self, address: int, value: int) -> None:
-        self._check_bounds(address)
-        self._data[address] = value & 0xFF
+    def fill_rect(self, x: int, y: int, width: int, height: int, color: tuple[int, int, int]) -> None:
+        for py in range(max(0, y), min(self.height, y + height)):
+            for px in range(max(0, x), min(self.width, x + width)):
+                self.pixels[self._index(px, py)] = tuple(channel & 0xFF for channel in color)
 
-    def write_u16(self, address: int, value: int) -> None:
-        value &= 0xFFFF
-        self.write_u8(address, value & 0xFF)
-        self.write_u8(address + 1, (value >> 8) & 0xFF)
+    def draw_line(self, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
 
-    def write_u32(self, address: int, value: int) -> None:
-        value &= 0xFFFFFFFF
-        for offset in range(4):
-            self.write_u8(address + offset, (value >> (offset * 8)) & 0xFF)
+        while True:
+            if 0 <= x1 < self.width and 0 <= y1 < self.height:
+                self.draw_pixel(x1, y1, color)
+            if x1 == x2 and y1 == y2:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x1 += sx
+            if e2 < dx:
+                err += dx
+                y1 += sy
 
-    def load_bytes(self, address: int, payload: bytes) -> None:
-        for index, byte in enumerate(payload):
-            self.write_u8(address + index, byte)
+    def draw_sprite(self, x: int, y: int, sprite: list[list[tuple[int, int, int]]], transparent: tuple[int, int, int] | None = None) -> None:
+        for row_index, row in enumerate(sprite):
+            for col_index, color in enumerate(row):
+                if transparent is not None and color == transparent:
+                    continue
+                self.draw_pixel(x + col_index, y + row_index, color)
 
-    def dump_range(self, start: int, length: int) -> bytes:
-        return bytes(self._data[start:start + length])
+    def snapshot(self) -> list[tuple[int, int, int]]:
+        return list(self.pixels)
 
-
-class PSPMemoryMap(MemoryMap):
-    """Mapa de memória que simula as regiões principais do PSP."""
-
-    def __init__(self, size: int = 64 * 1024 * 1024):
-        super().__init__(size)
-        self.regions = {
-            "user_ram": (0x08000000, 0x08400000),
-            "vram": (0x04000000, 0x04200000),
-            "scratchpad": (0x00010000, 0x00014000),
-            "kernel": (0x88000000, 0x8C000000),
+    def summary(self) -> dict:
+        return {
+            "width": self.width,
+            "height": self.height,
+            "background": self.background,
+            "pixels": self.width * self.height,
         }
 
-    def region_for(self, address: int) -> str | None:
-        for name, (start, end) in self.regions.items():
-            if start <= address < end:
-                return name
-        return None
+
+class PSPGPU:
+    """GPU simplificada para produção de quadros e renderização de telas de teste."""
+
+    def __init__(self, width: int = 480, height: int = 272, background: tuple[int, int, int] = (0, 0, 0)):
+        self.framebuffer = Framebuffer(width=width, height=height, background=background)
+        self.frame = 0
+
+    def clear(self, color: tuple[int, int, int] | None = None) -> None:
+        self.framebuffer.clear(color)
+
+    def fill_rect(self, x: int, y: int, width: int, height: int, color: tuple[int, int, int]) -> None:
+        self.framebuffer.fill_rect(x, y, width, height, color)
+
+    def draw_line(self, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
+        self.framebuffer.draw_line(x1, y1, x2, y2, color)
+
+    def draw_sprite(self, x: int, y: int, sprite: list[list[tuple[int, int, int]]], transparent: tuple[int, int, int] | None = None) -> None:
+        self.framebuffer.draw_sprite(x, y, sprite, transparent=transparent)
+
+    def present(self) -> dict:
+        self.frame += 1
+        return {"frame": self.frame, "size": (self.framebuffer.width, self.framebuffer.height)}
+
+    def summary(self) -> dict:
+        info = self.framebuffer.summary()
+        info["frame"] = self.frame
+        return info
 
 
-class MIPS32Core:
-    """Núcleo MIPS32 básico com suporte a instruções essenciais do PSP."""
+__all__ = ["Framebuffer", "PSPGPU"]
 
-    REG_NAMES = {
-        0: "zero", 1: "at", 2: "v0", 3: "v1", 4: "a0", 5: "a1", 6: "a2", 7: "a3",
-        8: "t0", 9: "t1", 10: "t2", 11: "t3", 12: "t4", 13: "t5", 14: "t6", 15: "t7",
-        16: "s0", 17: "s1", 18: "s2", 19: "s3", 20: "s4", 21: "s5", 22: "s6", 23: "s7",
-        24: "t8", 25: "t9", 26: "k0", 27: "k1", 28: "gp", 29: "sp", 30: "fp", 31: "ra",
+
+path":"psp_emulator/input.py","content":"from __future__ import annotations
+
+
+class InputController:
+    """Controla o estado de botões do PSP em um nível inicial."""
+
+    BUTTONS = {
+        "up",
+        "down",
+        "left",
+        "right",
+        "cross",
+        "circle",
+        "square",
+        "triangle",
+        "l",
+        "r",
+        "start",
+        "select",
     }
 
-    def __init__(self, memory: MemoryMap):
-        self.memory = memory
-        self.reset()
+    def __init__(self):
+        self.state = {button: False for button in sorted(self.BUTTONS)}
 
-    def reset(self) -> None:
-        self.regs = [0] * 32
-        self.hi = 0
-        self.lo = 0
-        self.pc = 0x08800000
+    def press(self, *buttons: str) -> None:
+        for button in buttons:
+            if button in self.state:
+                self.state[button] = True
 
-    def read_reg(self, index: int | str) -> int:
-        if isinstance(index, str):
-            index = self._resolve_name(index)
-        return self.regs[index & 0x1F]
+    def release(self, *buttons: str) -> None:
+        for button in buttons:
+            if button in self.state:
+                self.state[button] = False
 
-    def write_reg(self, index: int | str, value: int) -> None:
-        value &= 0xFFFFFFFF
-        if isinstance(index, str):
-            index = self._resolve_name(index)
-        if index != 0:
-            self.regs[index & 0x1F] = value
+    def set_state(self, values: dict[str, bool]) -> None:
+        for button, pressed in values.items():
+            if button in self.state:
+                self.state[button] = bool(pressed)
 
-    def _resolve_name(self, name: str) -> int:
-        for reg_index, reg_name in self.REG_NAMES.items():
-            if reg_name == name:
-                return reg_index
-        raise KeyError(f"Registrador desconhecido: {name}")
+    def snapshot(self) -> dict[str, bool]:
+        return dict(self.state)
 
-    def _sign_extend(self, value: int, bits: int) -> int:
-        sign_bit = 1 << (bits - 1)
-        return (value ^ sign_bit) - sign_bit
+    def is_pressed(self, button: str) -> bool:
+        return bool(self.state.get(button, False))
 
-    def _branch_target(self, immediate: int) -> int:
-        return (self.pc + 4 + (immediate << 2)) & 0xFFFFFFFF
-
-    def _jump_target(self, instruction: int) -> int:
-        return ((self.pc + 4) & 0xF0000000) | ((instruction & 0x03FFFFFF) << 2)
-
-    def step(self) -> int:
-        instruction = self.memory.read_u32(self.pc)
-        self.execute_instruction(instruction)
-        return instruction
-
-    def execute_instruction(self, instruction: int) -> None:
-        opcode = (instruction >> 26) & 0x3F
-        rs = (instruction >> 21) & 0x1F
-        rt = (instruction >> 16) & 0x1F
-        rd = (instruction >> 11) & 0x1F
-        shamt = (instruction >> 6) & 0x1F
-        funct = instruction & 0x3F
-        imm = instruction & 0xFFFF
-        simm = self._sign_extend(imm, 16)
-        next_pc = (self.pc + 4) & 0xFFFFFFFF
-
-        if instruction == 0:
-            self.pc = next_pc
-            return
-
-        if opcode == 0x00:
-            if funct == 0x00:
-                self.pc = next_pc
-                return
-            if funct == 0x02:
-                self.write_reg(rd, self.read_reg(rt) >> shamt)
-                self.pc = next_pc
-                return
-            if funct == 0x03:
-                value = self.read_reg(rt) >> shamt
-                self.write_reg(rd, self._sign_extend(value, 32 - shamt) if shamt else value)
-                self.pc = next_pc
-                return
-            if funct == 0x08:
-                self.pc = self.read_reg(rs)
-                return
-            if funct == 0x09:
-                self.write_reg(rd, next_pc)
-                self.pc = self.read_reg(rs)
-                return
-            if funct == 0x20:
-                self.write_reg(rd, (self.read_reg(rs) + self.read_reg(rt)) & 0xFFFFFFFF)
-                self.pc = next_pc
-                return
-            if funct == 0x21:
-                self.write_reg(rd, (self.read_reg(rs) + self.read_reg(rt)) & 0xFFFFFFFF)
-                self.pc = next_pc
-                return
-            if funct == 0x22:
-                self.write_reg(rd, (self.read_reg(rs) - self.read_reg(rt)) & 0xFFFFFFFF)
-                self.pc = next_pc
-                return
-            if funct == 0x24:
-                self.write_reg(rd, self.read_reg(rs) & self.read_reg(rt))
-                self.pc = next_pc
-                return
-            if funct == 0x25:
-                self.write_reg(rd, self.read_reg(rs) | self.read_reg(rt))
-                self.pc = next_pc
-                return
-            if funct == 0x26:
-                self.write_reg(rd, self.read_reg(rs) ^ self.read_reg(rt))
-                self.pc = next_pc
-                return
-            if funct == 0x27:
-                self.write_reg(rd, (~(self.read_reg(rs) | self.read_reg(rt))) & 0xFFFFFFFF)
-                self.pc = next_pc
-                return
-            if funct == 0x2A:
-                self.write_reg(rd, int(self.read_reg(rs) < self.read_reg(rt)))
-                self.pc = next_pc
-                return
-
-        if opcode == 0x01:
-            if rt == 0x00:
-                self.pc = next_pc if self.read_reg(rs) >= 0 else self._branch_target(simm)
-                return
-            if rt == 0x01:
-                self.pc = next_pc if self.read_reg(rs) < 0 else self._branch_target(simm)
-                return
-
-        if opcode == 0x02:
-            self.pc = self._jump_target(instruction)
-            return
-
-        if opcode == 0x03:
-            self.write_reg(31, next_pc + 4)
-            self.pc = self._jump_target(instruction)
-            return
-
-        if opcode == 0x04:
-            self.pc = self._branch_target(simm) if self.read_reg(rs) == self.read_reg(rt) else next_pc
-            return
-
-        if opcode == 0x05:
-            self.pc = self._branch_target(simm) if self.read_reg(rs) != self.read_reg(rt) else next_pc
-            return
-
-        if opcode == 0x08:
-            self.write_reg(rt, (self.read_reg(rs) + simm) & 0xFFFFFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x09:
-            self.write_reg(rt, (self.read_reg(rs) + simm) & 0xFFFFFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x0C:
-            self.write_reg(rt, self.read_reg(rs) & imm)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x0D:
-            self.write_reg(rt, self.read_reg(rs) | imm)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x0F:
-            self.write_reg(rt, (imm << 16) & 0xFFFFFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x20:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            value = self.memory.read_u8(effective_address)
-            if value & 0x80:
-                value -= 0x100
-            self.write_reg(rt, value & 0xFFFFFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x21:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            value = self.memory.read_u16(effective_address)
-            if value & 0x8000:
-                value -= 0x10000
-            self.write_reg(rt, value & 0xFFFFFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x23:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.write_reg(rt, self.memory.read_u32(effective_address))
-            self.pc = next_pc
-            return
-
-        if opcode == 0x24:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.write_reg(rt, self.memory.read_u8(effective_address))
-            self.pc = next_pc
-            return
-
-        if opcode == 0x25:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.write_reg(rt, self.memory.read_u16(effective_address))
-            self.pc = next_pc
-            return
-
-        if opcode == 0x28:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.memory.write_u8(effective_address, self.read_reg(rt) & 0xFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x29:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.memory.write_u16(effective_address, self.read_reg(rt) & 0xFFFF)
-            self.pc = next_pc
-            return
-
-        if opcode == 0x2B:
-            effective_address = (self.read_reg(rs) + simm) & 0xFFFFFFFF
-            self.memory.write_u32(effective_address, self.read_reg(rt))
-            self.pc = next_pc
-            return
-
-        raise NotImplementedError(f"Instrução MIPS não implementada: opcode 0x{opcode:02x}, instr 0x{instruction:08x}")
-
-    def load_program(self, instructions: list[int], base_address: int = 0x08800000) -> None:
-        self.pc = base_address
-        for index, instruction in enumerate(instructions):
-            self.memory.write_u32(base_address + index * 4, instruction)
-
-    def snapshot(self) -> dict:
-        regs = {}
-        for reg_index, reg_name in self.REG_NAMES.items():
-            regs[reg_name] = self.read_reg(reg_index)
-        return {"pc": self.pc, "regs": regs, "hi": self.hi, "lo": self.lo}
-
-    def __repr__(self) -> str:
-        return f"MIPS32Core(pc=0x{self.pc:08x}, t0={self.read_reg('t0')}, t1={self.read_reg('t1')})"
+    def clear(self) -> None:
+        for button in self.state:
+            self.state[button] = False
 
 
-__all__ = ["MemoryMap", "PSPMemoryMap", "MIPS32Core"]
+__all__ = ["InputController"]
+
+
+path":"tests/test_phase7.py","content":"from psp_emulator.gpu import Framebuffer, PSPGPU
+
+
+def test_framebuffer_clear_and_fill():
+    fb = Framebuffer(width=10, height=10, background=(0, 0, 0))
+    fb.clear((10, 20, 30))
+    assert fb.pixels[0] == (10, 20, 30)
+    fb.fill_rect(2, 2, 3, 2, (255, 0, 0))
+    assert fb.pixels[2 + 2 * 10] == (255, 0, 0)
+
+
+def test_gpu_draw_sprite_and_present():
+    gpu = PSPGPU(width=8, height=8)
+    sprite = [
+        [(255, 0, 0), (255, 0, 0)],
+        [(0, 255, 0), (0, 255, 0)],
+    ]
+    gpu.draw_sprite(1, 1, sprite, transparent=(0, 0, 0))
+    info = gpu.present()
+    assert info["frame"] == 1
+    assert gpu.summary()["frame"] == 1
+
+
+def test_draw_line_updates_pixels():
+    fb = Framebuffer(width=5, height=5)
+    fb.draw_line(0, 0, 4, 4, (1, 2, 3))
+    assert fb.pixels[0] == (1, 2, 3)
+    assert fb.pixels[4 + 4 * 5] == (1, 2, 3)
