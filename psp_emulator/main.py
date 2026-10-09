@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .core import MIPS32Core, PSPMemoryMap
+from .gpu import PSPGPU
 
 
 class BIOS:
@@ -17,6 +18,7 @@ class PSPEmulator:
     def __init__(self, rom_path: str | None = None):
         self.memory = PSPMemoryMap()
         self.cpu = MIPS32Core(self.memory)
+        self.gpu = PSPGPU()
         self.bios = BIOS()
         self.rom_path = rom_path
 
@@ -35,15 +37,17 @@ class PSPEmulator:
             0x24090005,
             0x240A0003,
             0x012A4020,
-            0x05000002,
-            0x00000000,
             0x00000000,
         ]
         self.cpu.load_program(instructions, base_address=0x08800000)
+        self.gpu.clear((0, 0, 0))
+        self.gpu.fill_rect(10, 10, 100, 40, (255, 0, 0))
 
     def run(self, steps: int = 1) -> None:
         for _ in range(max(0, steps)):
             self.cpu.step()
+            if self.cpu.pc % 16 == 0:
+                self.gpu.present()
 
     def state_summary(self) -> str:
         snapshot = self.cpu.snapshot()
@@ -57,5 +61,8 @@ class PSPEmulator:
             f"BIOS={self.bios.boot()['bios']}"
         )
 
+    def gpu_summary(self) -> dict:
+        return self.gpu.summary()
+
     def boot(self) -> dict:
-        return self.bios.boot()
+        return {"bios": self.bios.boot(), "gpu": self.gpu_summary()}
