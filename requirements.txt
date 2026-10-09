@@ -1,0 +1,20 @@
+[app]
+package.name = pspandroidproto
+package.domain = org.example
+source.dir = .
+source.include_exts = py,png,jpg,kv,atlas
+version = 0.1.0
+requirements = python3,kivy
+orientation = landscape
+fullscreen = 0
+android.api = 31
+android.minapi = 21
+android.sdk = 35
+android.ndk = 26b
+android.gradle_dependencies =
+
+[build]
+# Buildozer settings
+
+[deploy]
+# Deployment settings
