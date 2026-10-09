@@ -1,0 +1,39 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from psp_emulator.emulator import PSPEmulator
+from psp_emulator.main import MemoryMap, MIPS32Core
+
+
+def test_memory_round_trip():
+    memory = MemoryMap()
+    memory.write_u32(0x1000, 0x12345678)
+    assert memory.read_u32(0x1000) == 0x12345678
+
+
+def test_cpu_addi_and_add():
+    memory = MemoryMap()
+    cpu = MIPS32Core(memory)
+    cpu.pc = 0x1000
+    memory.write_u32(0x1000, 0x24090005)  # addiu t1, zero, 5
+    memory.write_u32(0x1004, 0x240A0003)  # addiu t2, zero, 3
+    memory.write_u32(0x1008, 0x012A4020)  # add a0, t1, t2
+    cpu.step()
+    cpu.step()
+    cpu.step()
+    assert cpu.read_reg("t1") == 5
+    assert cpu.read_reg("t2") == 3
+    assert cpu.read_reg("a0") == 8
+
+
+def test_psp_demo_boot():
+    emulator = PSPEmulator()
+    emulator.load_demo_program()
+    emulator.run(3)
+    assert emulator.cpu.read_reg("t1") == 5
+    assert emulator.cpu.read_reg("t2") == 3
+    assert emulator.cpu.read_reg("a0") == 8
