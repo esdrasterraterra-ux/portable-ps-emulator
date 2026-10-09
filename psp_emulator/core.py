@@ -352,9 +352,6 @@ class PSPRomLoader:
         if len(payload) < 52 or payload[:4] != b"\x7fELF":
             raise ROMFormatError("Arquivo ELF inválido")
 
-        if payload[4] != 1:
-            raise ROMFormatError("Apenas ELF de 32 bits é suportado")
-
         if payload[5] == 1:
             endian = "<"
         elif payload[5] == 2:
@@ -386,9 +383,6 @@ class PSPRomLoader:
     def load_pbp(self, payload: bytes, base_address: int = 0x08800000) -> dict:
         if len(payload) < 0x100:
             raise ROMFormatError("Arquivo PBP inválido")
-
-        # PBP típico contém um cabeçalho inicial e um bloco principal de dados.
-        # Para uma implementação inicial, carregamos a parte útil do arquivo após o cabeçalho.
         data_region = payload[0x100:]
         self.memory.load_bytes(base_address, data_region[: 0x100000])
         return {"format": "pbp", "entry": base_address, "size": len(data_region), "address": base_address}
@@ -609,4 +603,4 @@ path":".gitignore","content":"__pycache__/
 *.pyc
 .pytest_cache/
 .venv/
-"}],
+"}
